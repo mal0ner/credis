@@ -3,6 +3,7 @@ mod protocol;
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    thread,
 };
 
 fn main() {
@@ -15,18 +16,28 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut s) => {
+            Ok(s) => {
                 println!("accepted new connection");
                 // s.write_all(b"+PONG\r\n").unwrap();
-                let mut recvbuf = [0; 1024];
-                while s.read(&mut recvbuf).is_ok() {
-                    let _kind = protocol::parse_bytestream(&recvbuf).unwrap();
-                    s.write_all(b"+PONG\r\n").unwrap();
-                }
+                thread::spawn(move || {
+                    handle_connection(s).unwrap_or_else(|err| eprintln!("{:?}", err));
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
             }
+        };
+    }
+}
+
+fn handle_connection(mut stream: std::net::TcpStream) -> Result<(), anyhow::Error> {
+    let mut recvbuf = [0; 1024];
+    loop {
+        let _num_bytes = stream.read(&mut recvbuf)?;
+        if _num_bytes == 0 {
+            return Ok(());
         }
+        stream.write_all(b"+PONG\r\n")?;
+        stream.flush()?;
     }
 }
