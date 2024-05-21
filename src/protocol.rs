@@ -36,6 +36,44 @@ impl Kind {
             _ => None,
         }
     }
+
+    //fn byte(k: Kind) -> u8 {
+    //    match k {
+    //        Kind::SimpleString => b'+',
+    //        Kind::Integer => b':',
+    //        Kind::BulkString => b'$',
+    //        Kind::Array => b'*',
+    //        Kind::SimpleError => b'-',
+    //        Kind::Null => b'_',
+    //        Kind::Boolean => b'#',
+    //        Kind::Double => b',',
+    //        Kind::Big => b'(',
+    //        Kind::BulkError => b'!',
+    //        Kind::VerbatimString => b'=',
+    //        Kind::Map => b'%',
+    //        Kind::Set => b'~',
+    //        Kind::Push => b'>',
+    //    }
+    //}
+
+    fn byte_char(k: Kind) -> char {
+        match k {
+            Kind::SimpleString => '+',
+            Kind::Integer => ':',
+            Kind::BulkString => '$',
+            Kind::Array => '*',
+            Kind::SimpleError => '-',
+            Kind::Null => '_',
+            Kind::Boolean => '#',
+            Kind::Double => ',',
+            Kind::Big => '(',
+            Kind::BulkError => '!',
+            Kind::VerbatimString => '=',
+            Kind::Map => '%',
+            Kind::Set => '~',
+            Kind::Push => '>',
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +104,7 @@ impl std::error::Error for RespError {}
 pub enum Resp {
     SimpleString(String),
     Integer(i64),
-    BulkString(Option<Vec<u8>>),
+    BulkString(Option<String>),
     Array(Vec<Resp>),
     //SimpleError(String),
     Null,
@@ -78,6 +116,62 @@ pub enum Resp {
     // Map,
     // Set,
     // Push,
+}
+
+pub trait RespEncoding {
+    fn encoded_string(&self) -> String;
+    fn encode(&self) -> Vec<u8>;
+}
+
+impl RespEncoding for Resp {
+    fn encoded_string(&self) -> String {
+        match self {
+            Resp::SimpleString(s) => {
+                let mut result = Kind::byte_char(Kind::SimpleString).to_string();
+                result.push_str(s);
+                result.push_str("\r\n");
+                result
+            }
+            //Resp::SimpleError(e) => {
+            //    let mut result = Kind::byte_char(Kind::SimpleError).to_string();
+            //    result.push_str(e);
+            //    result.push_str("\r\n");
+            //    result
+            //}
+            Resp::Integer(i) => {
+                let mut result = Kind::byte_char(Kind::Integer).to_string();
+                result.push_str(&i.to_string());
+                result.push_str("\r\n");
+                result
+            }
+            Resp::BulkString(data) => {
+                let mut result = Kind::byte_char(Kind::BulkString).to_string();
+                println!("bulk string encoding start: {}", result);
+                if let Some(value) = data {
+                    result.push_str(&value.len().to_string());
+                    result.push_str("\r\n");
+                    result.push_str(value);
+                    result.push_str("\r\n");
+                } else {
+                    result.push_str("-1\r\n");
+                }
+                result
+            }
+            Resp::Array(list) => {
+                let mut result = Kind::byte_char(Kind::Array).to_string();
+                result.push_str(&list.len().to_string());
+                result.push_str("\r\n");
+                for item in list {
+                    result.push_str(&item.encoded_string());
+                }
+                result
+            }
+            Resp::Null => "$-1\r\n".to_string(),
+        }
+    }
+    fn encode(&self) -> Vec<u8> {
+        self.encoded_string().into_bytes()
+    }
 }
 
 // Parses data based on Resp kind as indicated by the first byte.
@@ -144,17 +238,18 @@ fn parse_bulk(b: &[u8]) -> Result<(Resp, usize), RespError> {
         ));
     }
 
-    let data = b[data_start..data_end].to_vec();
-    println!(
-        "parsed bulk string: {}",
-        std::str::from_utf8(&data).unwrap()
-    );
+    let data = std::str::from_utf8(&b[data_start..data_end])
+        .map_err(|_| RespError::InvalidData("Invalid UTF-8 in bulk string"))?;
+    //println!(
+    //    "parsed bulk string: {}",
+    //    std::str::from_utf8(&data).unwrap()
+    //);
     // HACK: Add 2 to the buffer size as we remove two datatype specification
     // bytes with calls to readnext_resp (one for the $[length]), and one for the
     // actual string... or something like that...
     // This is terrible and a magic number?
     // I don't know...
-    Ok((Resp::BulkString(Some(data)), data_end + 2))
+    Ok((Resp::BulkString(Some(data.to_string())), data_end + 2))
 }
 
 fn parse_array(b: &[u8]) -> Result<(Resp, usize), RespError> {
@@ -204,12 +299,8 @@ fn parse_next_arr_value(b: &[u8]) -> Result<(Resp, &[u8]), RespError> {
 }
 
 fn find_clrf_index(b: &[u8]) -> Option<usize> {
-    //println!("finding clrf index in: {}", std::str::from_utf8(b).unwrap());
     b.windows(2)
-        .position(|window| {
-            //println!("got window: {}", std::str::from_utf8(window).unwrap());
-            window == b"\r\n"
-        })
+        .position(|window| window == b"\r\n")
         .map(|pos| pos + 2)
 }
 
@@ -224,8 +315,8 @@ mod tests {
         assert_eq!(
             parsed,
             Resp::Array(vec![
-                Resp::BulkString(Some(b"ECHO".to_vec())),
-                Resp::BulkString(Some(b"hey".to_vec())),
+                Resp::BulkString(Some("ECHO".to_string())),
+                Resp::BulkString(Some("hey".to_string()))
             ])
         );
 
