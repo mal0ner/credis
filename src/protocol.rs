@@ -37,25 +37,6 @@ impl Kind {
         }
     }
 
-    //fn byte(k: Kind) -> u8 {
-    //    match k {
-    //        Kind::SimpleString => b'+',
-    //        Kind::Integer => b':',
-    //        Kind::BulkString => b'$',
-    //        Kind::Array => b'*',
-    //        Kind::SimpleError => b'-',
-    //        Kind::Null => b'_',
-    //        Kind::Boolean => b'#',
-    //        Kind::Double => b',',
-    //        Kind::Big => b'(',
-    //        Kind::BulkError => b'!',
-    //        Kind::VerbatimString => b'=',
-    //        Kind::Map => b'%',
-    //        Kind::Set => b'~',
-    //        Kind::Push => b'>',
-    //    }
-    //}
-
     fn byte_char(k: Kind) -> char {
         match k {
             Kind::SimpleString => '+',
@@ -76,29 +57,13 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum RespError {
+    #[error("RESP Error: Invalid Data - {}", .0)]
     InvalidData(&'static str),
+    #[error("RESP Error: Invalid Type - {}", .0)]
     InvalidType(&'static str),
 }
-
-impl std::fmt::Display for RespError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RespError::InvalidData(msg) => write!(f, "RESP Error: Invalid Data - {}", msg),
-            RespError::InvalidType(msg) => write!(f, "RESP Error: Invalid Type - {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for RespError {}
-
-// pub struct Resp<'a> {
-//     resp_type: Kind,
-//     data: &'a [u8],
-//     raw: &'a [u8],
-//     size: usize,
-// }
 
 #[derive(Debug, PartialEq)]
 pub enum Resp {
@@ -106,16 +71,7 @@ pub enum Resp {
     Integer(i64),
     BulkString(Option<String>),
     Array(Vec<Resp>),
-    //SimpleError(String),
     Null,
-    //Boolean(bool),
-    // Double(f64),
-    // Big(String),
-    // BulkError,
-    // VerbatimString(String),
-    // Map,
-    // Set,
-    // Push,
 }
 
 pub trait RespEncoding {
@@ -132,12 +88,6 @@ impl RespEncoding for Resp {
                 result.push_str("\r\n");
                 result
             }
-            //Resp::SimpleError(e) => {
-            //    let mut result = Kind::byte_char(Kind::SimpleError).to_string();
-            //    result.push_str(e);
-            //    result.push_str("\r\n");
-            //    result
-            //}
             Resp::Integer(i) => {
                 let mut result = Kind::byte_char(Kind::Integer).to_string();
                 result.push_str(&i.to_string());
@@ -146,7 +96,6 @@ impl RespEncoding for Resp {
             }
             Resp::BulkString(data) => {
                 let mut result = Kind::byte_char(Kind::BulkString).to_string();
-                println!("bulk string encoding start: {}", result);
                 if let Some(value) = data {
                     result.push_str(&value.len().to_string());
                     result.push_str("\r\n");
@@ -181,10 +130,6 @@ pub fn readnext_resp(b: &[u8]) -> Result<(Resp, usize), RespError> {
         return Err(RespError::InvalidData("incoming bytestream empty"));
     }
 
-    println!(
-        "reading resp, check first char: {:?}",
-        std::str::from_utf8(b).unwrap().chars().next()
-    );
     let resp_kind =
         Kind::from_byte(b[0]).ok_or(RespError::InvalidType("unrecognized datatype prefix byte"))?;
 
@@ -240,10 +185,6 @@ fn parse_bulk(b: &[u8]) -> Result<(Resp, usize), RespError> {
 
     let data = std::str::from_utf8(&b[data_start..data_end])
         .map_err(|_| RespError::InvalidData("Invalid UTF-8 in bulk string"))?;
-    //println!(
-    //    "parsed bulk string: {}",
-    //    std::str::from_utf8(&data).unwrap()
-    //);
     // HACK: Add 2 to the buffer size as we remove two datatype specification
     // bytes with calls to readnext_resp (one for the $[length]), and one for the
     // actual string... or something like that...
@@ -253,7 +194,6 @@ fn parse_bulk(b: &[u8]) -> Result<(Resp, usize), RespError> {
 }
 
 fn parse_array(b: &[u8]) -> Result<(Resp, usize), RespError> {
-    println!("parsing array: {}", std::str::from_utf8(b).unwrap());
     let len_end = find_clrf_index(b).ok_or(RespError::InvalidData(
         "CLRF not found in array length specification",
     ))?;
@@ -272,10 +212,6 @@ fn parse_array(b: &[u8]) -> Result<(Resp, usize), RespError> {
 
     let mut items = Vec::with_capacity(len as usize);
     let mut rest = &b[len_end..];
-    println!(
-        "body of arr (length spec removed):\n{}",
-        std::str::from_utf8(rest).unwrap()
-    );
     for _ in 0..len {
         let (item, remaining) = parse_next_arr_value(rest)?;
         items.push(item);
@@ -287,14 +223,9 @@ fn parse_array(b: &[u8]) -> Result<(Resp, usize), RespError> {
 
 fn parse_next_arr_value(b: &[u8]) -> Result<(Resp, &[u8]), RespError> {
     let (val, size) = readnext_resp(b)?;
-    //let end = find_clrf_index(b).unwrap_or(0);
-    println!(
-        "remaining for next parse:\n{}",
-        // HACK: Add 1 to the buffer size to account for the one taken off during
-        // the call to the readnext_resp function. This is terrible and a magic number?
-        // I don't know...
-        std::str::from_utf8(&b[size + 1..]).unwrap()
-    );
+    // HACK: Add 1 to the buffer size to account for the one taken off during
+    // the call to the readnext_resp function. This is terrible and a magic number?
+    // I don't know...
     Ok((val, &b[size + 1..]))
 }
 
@@ -319,9 +250,6 @@ mod tests {
                 Resp::BulkString(Some("hey".to_string()))
             ])
         );
-
-        //let response = handle_command(parsed).unwrap();
-        //assert_eq!(response, RespValue::BulkString(Some(b"hey".to_vec())));
     }
 
     #[test]

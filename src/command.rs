@@ -7,6 +7,8 @@ use crate::protocol;
 pub enum Command {
     Echo(String),
     Ping,
+    Get(String),
+    Set(String, String),
 }
 
 #[derive(Debug, Clone)]
@@ -70,15 +72,36 @@ fn parse_command(args: Vec<protocol::Resp>) -> Result<Command, CommandError> {
                 "PING command expects no arguments",
             )),
         },
+        "GET" => match args.get(1) {
+            Some(protocol::Resp::BulkString(Some(key))) => Ok(Command::Get(key.to_string())),
+            _ => Err(CommandError::InvalidArguments("Usage: GET <key>")),
+        },
+        "SET" => match (args.get(1), args.get(2)) {
+            (
+                Some(protocol::Resp::BulkString(Some(key))),
+                Some(protocol::Resp::BulkString(Some(value))),
+            ) => Ok(Command::Set(key.to_string(), value.to_string())),
+            _ => Err(CommandError::InvalidArguments("Usage: SET <key> <value>")),
+        },
         _ => Err(CommandError::InvalidCommand("Unsupported command")),
     }
 }
 
+// executes a command and returns the unencoded response.
 pub fn execute_command(cmd: Command) -> Result<protocol::Resp, CommandError> {
     match cmd {
-        Command::Echo(args) => Ok(protocol::Resp::BulkString(Some(args))),
-        Command::Ping => Ok(protocol::Resp::SimpleString("PONG".to_string())),
+        Command::Echo(arg) => echo(arg),
+        Command::Ping => ping(),
+        _ => Err(CommandError::InvalidCommand("unsupported command")),
     }
+}
+
+fn echo(arg: String) -> Result<protocol::Resp, CommandError> {
+    Ok(protocol::Resp::BulkString(Some(arg)))
+}
+
+fn ping() -> Result<protocol::Resp, CommandError> {
+    Ok(protocol::Resp::SimpleString("PONG".to_string()))
 }
 
 #[cfg(test)]
