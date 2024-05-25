@@ -1,3 +1,16 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use bytes::BytesMut;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
+
+use crate::command;
+
 #[derive(Debug, PartialEq)]
 pub enum Kind {
     SimpleString,
@@ -120,6 +133,46 @@ impl RespEncoding for Resp {
     }
     fn encode(&self) -> Vec<u8> {
         self.encoded_string().into_bytes()
+    }
+}
+
+pub struct Handler {
+    stream: TcpStream,
+    buf: BytesMut,
+}
+
+impl Handler {
+    pub fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            buf: BytesMut::with_capacity(1024),
+        }
+    }
+    pub async fn handle_stream(&mut self, cache: Arc<Mutex<HashMap<String, String>>>) {
+        loop {
+            let req = self.read_resp().await.unwrap();
+
+            let response = if let Some(req) = req {
+                let cmd = command::Command::from_resp(req).unwrap();
+                command::execute_command(cmd, &cache).unwrap()
+            } else {
+                break;
+            };
+            println!("sending response: {:?}", response);
+            self.write_resp(response).await.unwrap();
+        }
+    }
+    pub async fn read_resp(&mut self) -> Result<Option<Resp>, anyhow::Error> {
+        let bytes_read = self.stream.read_buf(&mut self.buf).await?;
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+        let (resp, _) = readnext_resp(&self.buf.split())?;
+        Ok(Some(resp))
+    }
+    pub async fn write_resp(&mut self, resp: Resp) -> anyhow::Result<()> {
+        self.stream.write_all(&resp.encode()).await?;
+        Ok(())
     }
 }
 

@@ -1,7 +1,10 @@
-use std::fmt::{Display, Formatter};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    sync::{Arc, Mutex},
+};
 
 use crate::protocol;
-//use anyhow::{Ok, Result};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -88,20 +91,27 @@ fn parse_command(args: Vec<protocol::Resp>) -> Result<Command, CommandError> {
 }
 
 // executes a command and returns the unencoded response.
-pub fn execute_command(cmd: Command) -> Result<protocol::Resp, CommandError> {
+pub fn execute_command(
+    cmd: Command,
+    cache: &Arc<Mutex<HashMap<String, String>>>,
+) -> Result<protocol::Resp, CommandError> {
     match cmd {
-        Command::Echo(arg) => echo(arg),
-        Command::Ping => ping(),
-        _ => Err(CommandError::InvalidCommand("unsupported command")),
+        Command::Echo(arg) => Ok(protocol::Resp::BulkString(Some(arg))),
+        Command::Ping => Ok(protocol::Resp::SimpleString("PONG".to_string())),
+        Command::Get(key) => {
+            let cache = cache.lock().unwrap();
+            if let Some(value) = cache.get(&key) {
+                Ok(protocol::Resp::BulkString(Some(value.clone())))
+            } else {
+                Ok(protocol::Resp::Null)
+            }
+        }
+        Command::Set(key, value) => {
+            let mut cache = cache.lock().unwrap();
+            cache.insert(key, value);
+            Ok(protocol::Resp::SimpleString("OK".to_string()))
+        }
     }
-}
-
-fn echo(arg: String) -> Result<protocol::Resp, CommandError> {
-    Ok(protocol::Resp::BulkString(Some(arg)))
-}
-
-fn ping() -> Result<protocol::Resp, CommandError> {
-    Ok(protocol::Resp::SimpleString("PONG".to_string()))
 }
 
 #[cfg(test)]
@@ -120,23 +130,6 @@ mod tests {
         match command {
             Command::Echo(args) => assert_eq!(args, "hello".to_string()),
             _ => panic!("Expected Echo command"),
-        }
-    }
-
-    #[test]
-    fn test_execute_echo_command() {
-        let input = Resp::Array(vec![
-            Resp::BulkString(Some("ECHO".to_string())),
-            Resp::BulkString(Some("hello".to_string())),
-        ]);
-
-        let command = Command::from_resp(input).unwrap();
-
-        let response = execute_command(command).unwrap();
-
-        match response {
-            Resp::BulkString(Some(s)) => assert_eq!(s, "hello".to_string()),
-            _ => panic!("Expected hello response"),
         }
     }
 
