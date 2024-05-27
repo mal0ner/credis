@@ -1,115 +1,148 @@
 use std::{
     collections::HashMap,
-    fmt::{Display, Formatter},
     sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
 };
 
-use crate::protocol;
+use crate::protocol::{Query, Resp};
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Echo(String),
     Ping,
     Get(String),
-    Set(String, String),
+    Set(String, String, Option<u64>), // <KEY> <VALUE> <TIMEOUT>
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum CommandError {
+    #[error("Command Error: Invalid Command - {}", .0)]
     InvalidCommand(&'static str),
+    #[error("Command Error: Invalid Arguments - {}", .0)]
     InvalidArguments(&'static str),
 }
 
-impl Display for CommandError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CommandError::InvalidCommand(msg) => {
-                write!(f, "Command Error: Invalid Command - {}", msg)
-            }
-            CommandError::InvalidArguments(msg) => {
-                write!(f, "Command Error: Invalid Arguments - {}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for CommandError {}
-
 impl Command {
-    pub fn from_resp(resp: protocol::Resp) -> Result<Command, CommandError> {
+    pub fn from_resp(resp: Resp) -> Result<Command, CommandError> {
         match resp {
-            protocol::Resp::Array(args) => parse_command(args),
+            Resp::Array(args) => parse_command(args),
             _ => Err(CommandError::InvalidCommand("resp should be an array")),
         }
     }
 }
 
-fn parse_command(args: Vec<protocol::Resp>) -> Result<Command, CommandError> {
+fn parse_command(args: Vec<Resp>) -> Result<Command, CommandError> {
+    use CommandError::*;
     let command_str = match args.first() {
-        Some(protocol::Resp::BulkString(Some(string))) => string,
-        _ => {
-            return Err(CommandError::InvalidCommand(
-                "Command must be a bulk string",
-            ))
-        }
+        Some(Resp::Bulk(Some(string))) => string,
+        _ => return Err(InvalidCommand("Command must be a bulk string")),
     };
 
     match command_str.to_uppercase().as_str() {
-        "ECHO" => match args.len() {
-            2 => {
-                if let protocol::Resp::BulkString(Some(data)) = &args[1] {
-                    Ok(Command::Echo(data.to_string()))
-                } else {
-                    Err(CommandError::InvalidArguments(
-                        "Argument must be a bulk string",
-                    ))
-                }
+        "ECHO" => parse_echo(&args),
+        "PING" => parse_ping(&args),
+        "GET" => parse_get(&args),
+        "SET" => parse_set(&args),
+        _ => Err(InvalidCommand("Unsupported command")),
+    }
+}
+
+fn parse_echo(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args.len() {
+        2 => {
+            if let Resp::Bulk(Some(data)) = &args[1] {
+                Ok(Command::Echo(data.to_string()))
+            } else {
+                Err(InvalidArguments("Argument must be a bulk string"))
             }
-            _ => Err(CommandError::InvalidArguments(
-                "ECHO command expects exactly one argument",
-            )),
-        },
-        "PING" => match args.len() {
-            1 => Ok(Command::Ping),
-            _ => Err(CommandError::InvalidArguments(
-                "PING command expects no arguments",
-            )),
-        },
-        "GET" => match args.get(1) {
-            Some(protocol::Resp::BulkString(Some(key))) => Ok(Command::Get(key.to_string())),
-            _ => Err(CommandError::InvalidArguments("Usage: GET <key>")),
-        },
-        "SET" => match (args.get(1), args.get(2)) {
-            (
-                Some(protocol::Resp::BulkString(Some(key))),
-                Some(protocol::Resp::BulkString(Some(value))),
-            ) => Ok(Command::Set(key.to_string(), value.to_string())),
-            _ => Err(CommandError::InvalidArguments("Usage: SET <key> <value>")),
-        },
-        _ => Err(CommandError::InvalidCommand("Unsupported command")),
+        }
+        _ => Err(InvalidArguments("command expects exactly one argument")),
+    }
+}
+
+fn parse_ping(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args.len() {
+        1 => Ok(Command::Ping),
+        _ => Err(InvalidArguments("PING command expects no arguments")),
+    }
+}
+
+fn parse_get(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args.get(1) {
+        Some(Resp::Bulk(Some(key))) => Ok(Command::Get(key.to_string())),
+        _ => Err(InvalidArguments("Usage: GET <key>")),
+    }
+}
+
+fn parse_set(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args {
+        [_, Resp::Bulk(Some(key)), Resp::Bulk(Some(val))] => {
+            Ok(Command::Set(key.to_string(), val.to_string(), None))
+        }
+        [_, Resp::Bulk(Some(key)), Resp::Bulk(Some(val)), Resp::Bulk(Some(px)), Resp::Bulk(Some(millis))] => {
+            if px.to_uppercase() == "PX" {
+                match millis.parse::<u64>() {
+                    Ok(ms) => Ok(Command::Set(key.to_string(), val.to_string(), Some(ms))),
+                    Err(_) => Err(InvalidArguments("Invalid millisecond value")),
+                }
+            } else {
+                Err(InvalidArguments("Unrecognized argument"))
+            }
+        }
+        _ => Err(InvalidArguments(
+            "Usage: SET <key> <value> <px> <milliseconds>",
+        )),
     }
 }
 
 // executes a command and returns the unencoded response.
 pub fn execute_command(
     cmd: Command,
-    cache: &Arc<Mutex<HashMap<String, String>>>,
-) -> Result<protocol::Resp, CommandError> {
+    cache: &Arc<Mutex<HashMap<String, Query>>>,
+) -> Result<Resp, CommandError> {
     match cmd {
-        Command::Echo(arg) => Ok(protocol::Resp::BulkString(Some(arg))),
-        Command::Ping => Ok(protocol::Resp::SimpleString("PONG".to_string())),
+        Command::Echo(arg) => Ok(Resp::Bulk(Some(arg))),
+        Command::Ping => Ok(Resp::SimpleString("PONG".to_string())),
         Command::Get(key) => {
-            let cache = cache.lock().unwrap();
+            let mut cache = cache.lock().unwrap();
+            let now = SystemTime::now();
             if let Some(value) = cache.get(&key) {
-                Ok(protocol::Resp::BulkString(Some(value.clone())))
+                let value = value.clone();
+                if let Some(timeout) = value.expiry {
+                    if timeout < now {
+                        cache.remove(&key);
+                        Ok(Resp::Null)
+                    } else {
+                        Ok(Resp::Bulk(Some(value.clone().value)))
+                    }
+                } else {
+                    Ok(Resp::Bulk(Some(value.clone().value)))
+                }
             } else {
-                Ok(protocol::Resp::Null)
+                Ok(Resp::Null)
             }
         }
-        Command::Set(key, value) => {
+        Command::Set(key, value, timeout) => {
             let mut cache = cache.lock().unwrap();
-            cache.insert(key, value);
-            Ok(protocol::Resp::SimpleString("OK".to_string()))
+            let mut expiry = None::<SystemTime>;
+            let now = SystemTime::now();
+
+            if let Some(timeout_val) = timeout {
+                expiry = Some(now + Duration::from_millis(timeout_val));
+            }
+            cache.insert(
+                key,
+                Query {
+                    value,
+                    created_at: now,
+                    expiry,
+                },
+            );
+            Ok(Resp::SimpleString("OK".to_string()))
         }
     }
 }
@@ -122,8 +155,8 @@ mod tests {
     #[test]
     fn test_parse_echo_command() {
         let input = Resp::Array(vec![
-            Resp::BulkString(Some("ECHO".to_string())),
-            Resp::BulkString(Some("hello".to_string())),
+            Resp::Bulk(Some("ECHO".to_string())),
+            Resp::Bulk(Some("hello".to_string())),
         ]);
 
         let command = Command::from_resp(input).unwrap();
@@ -148,7 +181,7 @@ mod tests {
     #[test]
     fn test_invalid_command_argument_type() {
         let input = Resp::Array(vec![
-            Resp::BulkString(Some("ECHO".to_string())),
+            Resp::Bulk(Some("ECHO".to_string())),
             Resp::Integer(42),
         ]);
 

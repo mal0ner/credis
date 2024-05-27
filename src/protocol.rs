@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::SystemTime,
 };
 
 use bytes::BytesMut;
@@ -15,7 +16,7 @@ use crate::command;
 pub enum Kind {
     SimpleString,
     Integer,
-    BulkString,
+    Bulk,
     Array,
     SimpleError,
     Null,
@@ -34,7 +35,7 @@ impl Kind {
         match byte {
             b'+' => Some(Kind::SimpleString),
             b':' => Some(Kind::Integer),
-            b'$' => Some(Kind::BulkString),
+            b'$' => Some(Kind::Bulk),
             b'*' => Some(Kind::Array),
             b'-' => Some(Kind::SimpleError),
             b'_' => Some(Kind::Null),
@@ -54,7 +55,7 @@ impl Kind {
         match k {
             Kind::SimpleString => '+',
             Kind::Integer => ':',
-            Kind::BulkString => '$',
+            Kind::Bulk => '$',
             Kind::Array => '*',
             Kind::SimpleError => '-',
             Kind::Null => '_',
@@ -82,7 +83,7 @@ pub enum RespError {
 pub enum Resp {
     SimpleString(String),
     Integer(i64),
-    BulkString(Option<String>),
+    Bulk(Option<String>),
     Array(Vec<Resp>),
     Null,
 }
@@ -107,8 +108,8 @@ impl RespEncoding for Resp {
                 result.push_str("\r\n");
                 result
             }
-            Resp::BulkString(data) => {
-                let mut result = Kind::byte_char(Kind::BulkString).to_string();
+            Resp::Bulk(data) => {
+                let mut result = Kind::byte_char(Kind::Bulk).to_string();
                 if let Some(value) = data {
                     result.push_str(&value.len().to_string());
                     result.push_str("\r\n");
@@ -136,6 +137,13 @@ impl RespEncoding for Resp {
     }
 }
 
+#[derive(Clone)]
+pub struct Query {
+    pub value: String,
+    pub created_at: SystemTime,
+    pub expiry: Option<SystemTime>,
+}
+
 pub struct Handler {
     stream: TcpStream,
     buf: BytesMut,
@@ -148,7 +156,7 @@ impl Handler {
             buf: BytesMut::with_capacity(1024),
         }
     }
-    pub async fn handle_stream(&mut self, cache: Arc<Mutex<HashMap<String, String>>>) {
+    pub async fn handle_stream(&mut self, cache: Arc<Mutex<HashMap<String, Query>>>) {
         loop {
             let req = self.read_resp().await.unwrap();
 
@@ -189,7 +197,7 @@ pub fn readnext_resp(b: &[u8]) -> Result<(Resp, usize), RespError> {
     match resp_kind {
         Kind::SimpleString => parse_string(&b[1..]),
         Kind::Integer => parse_integer(&b[1..]),
-        Kind::BulkString => parse_bulk(&b[1..]),
+        Kind::Bulk => parse_bulk(&b[1..]),
         Kind::Array => parse_array(&b[1..]),
         _ => Err(RespError::InvalidType("unsupported RESP type")),
     }
@@ -243,7 +251,7 @@ fn parse_bulk(b: &[u8]) -> Result<(Resp, usize), RespError> {
     // actual string... or something like that...
     // This is terrible and a magic number?
     // I don't know...
-    Ok((Resp::BulkString(Some(data.to_string())), data_end + 2))
+    Ok((Resp::Bulk(Some(data.to_string())), data_end + 2))
 }
 
 fn parse_array(b: &[u8]) -> Result<(Resp, usize), RespError> {
@@ -299,8 +307,8 @@ mod tests {
         assert_eq!(
             parsed,
             Resp::Array(vec![
-                Resp::BulkString(Some("ECHO".to_string())),
-                Resp::BulkString(Some("hey".to_string()))
+                Resp::Bulk(Some("ECHO".to_string())),
+                Resp::Bulk(Some("hey".to_string()))
             ])
         );
     }
