@@ -12,6 +12,7 @@ pub enum Command {
     Ping,
     Get(String),
     Set(String, String, Option<u64>), // <KEY> <VALUE> <TIMEOUT>
+    Info(Option<String>),
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -43,6 +44,7 @@ fn parse_command(args: Vec<Resp>) -> Result<Command, CommandError> {
         "PING" => parse_ping(&args),
         "GET" => parse_get(&args),
         "SET" => parse_set(&args),
+        "INFO" => parse_info(&args),
         _ => Err(InvalidCommand("Unsupported command")),
     }
 }
@@ -78,6 +80,7 @@ fn parse_get(args: &[Resp]) -> Result<Command, CommandError> {
 }
 
 fn parse_set(args: &[Resp]) -> Result<Command, CommandError> {
+    // HACK: After careful reflection, this is awful...
     use CommandError::*;
     match args {
         [_, Resp::Bulk(Some(key)), Resp::Bulk(Some(val))] => {
@@ -96,6 +99,20 @@ fn parse_set(args: &[Resp]) -> Result<Command, CommandError> {
         _ => Err(InvalidArguments(
             "Usage: SET <key> <value> <px> <milliseconds>",
         )),
+    }
+}
+
+fn parse_info(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args {
+        [_, Resp::Bulk(Some(category))] => {
+            if category.to_uppercase() == "REPLICATION" {
+                Ok(Command::Info(Some(category.to_string())))
+            } else {
+                Err(InvalidArguments("Unrecognized argument"))
+            }
+        }
+        _ => Err(InvalidArguments("Usage: INFO <category>")),
     }
 }
 
@@ -143,6 +160,13 @@ pub fn execute_command(
                 },
             );
             Ok(Resp::SimpleString("OK".to_string()))
+        }
+        Command::Info(category) => {
+            if category.is_some() {
+                Ok(Resp::Bulk(Some("role:master".to_string())))
+            } else {
+                Ok(Resp::Null)
+            }
         }
     }
 }
