@@ -16,17 +16,34 @@ pub enum Role {
 
 pub struct Info {
     role: Role,
+    master_replid: String,
+    master_repl_offset: usize,
 }
 
 impl Info {
     pub fn new(role: Role) -> Self {
-        Self { role }
+        Self {
+            role,
+            master_replid: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string(),
+            master_repl_offset: 0,
+        }
     }
     pub fn role(&self) -> String {
         match self.role {
             Role::Master => "role:master".to_string(),
             Role::Slave => "role:slave".to_string(),
         }
+    }
+    pub fn id(&self) -> String {
+        self.master_replid.to_string()
+    }
+    pub fn replication(&self) -> String {
+        format!(
+            "# Replication\nrole:{}\nmaster_replid:{}\nmaster_repl_offset:{}",
+            self.role(),
+            self.master_replid,
+            self.master_repl_offset
+        )
     }
 }
 

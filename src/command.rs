@@ -164,7 +164,7 @@ pub fn execute_command(
         }
         Command::Info(category) => {
             if category.is_some() {
-                Ok(Resp::Bulk(Some(info.role())))
+                Ok(Resp::Bulk(Some(info.replication())))
             } else {
                 Ok(Resp::Null)
             }
