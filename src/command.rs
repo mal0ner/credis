@@ -119,7 +119,8 @@ fn parse_info(args: &[Resp]) -> Result<Command, CommandError> {
 // executes a command and returns the unencoded response.
 pub fn execute_command(
     cmd: Command,
-    cache: &Arc<Mutex<HashMap<String, Query>>>,
+    cache: Arc<Mutex<HashMap<String, Query>>>,
+    info: Arc<crate::Info>,
 ) -> Result<Resp, CommandError> {
     match cmd {
         Command::Echo(arg) => Ok(Resp::Bulk(Some(arg))),
@@ -163,7 +164,7 @@ pub fn execute_command(
         }
         Command::Info(category) => {
             if category.is_some() {
-                Ok(Resp::Bulk(Some("role:master".to_string())))
+                Ok(Resp::Bulk(Some(info.role())))
             } else {
                 Ok(Resp::Null)
             }

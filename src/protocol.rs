@@ -10,7 +10,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::command;
+use crate::{command, Info};
 
 #[derive(Debug, PartialEq)]
 pub enum Kind {
@@ -146,13 +146,15 @@ pub struct Query {
 
 pub struct Handler {
     stream: TcpStream,
+    info: Arc<Info>,
     buf: BytesMut,
 }
 
 impl Handler {
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, server: Arc<Info>) -> Self {
         Self {
             stream,
+            info: server,
             buf: BytesMut::with_capacity(1024),
         }
     }
@@ -162,7 +164,7 @@ impl Handler {
 
             let response = if let Some(req) = req {
                 let cmd = command::Command::from_resp(req).unwrap();
-                command::execute_command(cmd, &cache).unwrap()
+                command::execute_command(cmd, cache.clone(), self.info.clone()).unwrap()
             } else {
                 break;
             };
