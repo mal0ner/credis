@@ -5,9 +5,14 @@ use clap::Parser;
 use clap_num::number_range;
 use std::{
     collections::HashMap,
+    net::{IpAddr, Ipv4Addr},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
-use tokio::net::TcpListener;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+};
 
 pub enum Role {
     Master,
@@ -47,6 +52,57 @@ impl Info {
     }
 }
 
+pub struct HostSpec {
+    host: String,
+    port: u16,
+}
+
+impl FromStr for HostSpec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let components: Vec<&str> = s.split_whitespace().collect();
+
+        if components.len() != 2 {
+            return Err("Invalid Master Host and Port specification.".to_string());
+        }
+
+        let host = components[0];
+        let port = components[1].parse::<u16>().map_err(|_| "Invalid Port")?;
+
+        if !(1024..=65535).contains(&port) {
+            return Err("Port must be between 1024 and 65535".to_string());
+        }
+
+        let ip_addr: IpAddr = match host.parse() {
+            Ok(addr) => addr,
+            Err(_) => {
+                if host != "localhost" {
+                    return Err("Invalid host".to_string());
+                }
+                IpAddr::V4(Ipv4Addr::LOCALHOST)
+            }
+        };
+
+        Ok(HostSpec {
+            host: ip_addr.to_string(),
+            port,
+        })
+    }
+}
+
+impl ToString for HostSpec {
+    fn to_string(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+async fn repl_handshake(address: HostSpec) -> anyhow::Result<()> {
+    let mut stream = TcpStream::connect(address.to_string()).await?;
+    stream.write_all(b"*1\r\n$4\r\nping\r\n").await?;
+    Ok(())
+}
+
 fn port_range(s: &str) -> Result<u16, String> {
     number_range(s, 1024, 65535)
 }
@@ -65,12 +121,20 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
     let args = Args::parse();
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    let role = if args.replicaof.is_some() {
+
+    let role = if let Some(address) = args.replicaof {
+        let master = address
+            .parse::<HostSpec>()
+            .expect("failed to parse master address");
+        repl_handshake(master)
+            .await
+            .expect("failed to perform handshake");
         Role::Slave
     } else {
         Role::Master
     };
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
     let info = Arc::new(Info::new(role));
     let cache = Arc::new(Mutex::new(HashMap::new()));
     loop {
