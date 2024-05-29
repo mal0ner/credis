@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
-use crate::protocol::{Query, Resp};
+use tokio::sync::Mutex;
+
+use crate::{protocol::Resp, server::Query};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -117,7 +119,7 @@ fn parse_info(args: &[Resp]) -> Result<Command, CommandError> {
 }
 
 // executes a command and returns the unencoded response.
-pub fn execute_command(
+pub async fn execute_command(
     cmd: Command,
     cache: Arc<Mutex<HashMap<String, Query>>>,
     info: Arc<crate::Info>,
@@ -126,7 +128,7 @@ pub fn execute_command(
         Command::Echo(arg) => Ok(Resp::Bulk(Some(arg))),
         Command::Ping => Ok(Resp::SimpleString("PONG".to_string())),
         Command::Get(key) => {
-            let mut cache = cache.lock().unwrap();
+            let mut cache = cache.lock().await;
             let now = SystemTime::now();
             if let Some(value) = cache.get(&key) {
                 let value = value.clone();
@@ -145,7 +147,7 @@ pub fn execute_command(
             }
         }
         Command::Set(key, value, timeout) => {
-            let mut cache = cache.lock().unwrap();
+            let mut cache = cache.lock().await;
             let mut expiry = None::<SystemTime>;
             let now = SystemTime::now();
 
