@@ -1,20 +1,34 @@
 mod command;
 mod protocol;
 mod server;
-// Uncomment this block to pass the first stage
+use crate::protocol::{Resp, RespEncoding};
+use bytes::BytesMut;
 use clap::Parser;
 use clap_num::number_range;
 use server::{Handler, HostSpec, Info, Query, Role};
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
 
-async fn repl_handshake(address: HostSpec) -> anyhow::Result<()> {
+async fn repl_handshake(port: u16, address: HostSpec) -> anyhow::Result<()> {
     let mut stream = TcpStream::connect(address.to_string()).await?;
     stream.write_all(b"*1\r\n$4\r\nping\r\n").await?;
+    let mut buf = BytesMut::with_capacity(512);
+    stream.read_buf(&mut buf).await?;
+    stream.flush().await?;
+    stream
+        .write_all(format_resp!["REPLCONF", "listening-port", port.to_string()])
+        .await?;
+    stream.flush().await?;
+    stream.read_buf(&mut buf).await?;
+    stream
+        .write_all(format_resp!["REPLCONF", "capa", "psync2"])
+        .await?;
+    stream.flush().await?;
+    stream.read_buf(&mut buf).await?;
     Ok(())
 }
 
@@ -41,7 +55,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         let master = address
             .parse::<HostSpec>()
             .expect("failed to parse master address");
-        repl_handshake(master)
+        repl_handshake(args.port, master)
             .await
             .expect("failed to perform handshake");
         Role::Slave

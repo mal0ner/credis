@@ -1,3 +1,10 @@
+#[macro_export]
+macro_rules! format_resp {
+    ($($str:expr),+) => {
+        &Resp::Array(vec![$(Resp::Bulk(Some($str.to_string()))),+]).encode()
+    };
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Kind {
     SimpleString,

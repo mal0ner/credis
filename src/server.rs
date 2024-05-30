@@ -43,9 +43,9 @@ impl Info {
             Role::Slave => "role:slave".to_string(),
         }
     }
-    pub fn id(&self) -> String {
-        self.master_replid.to_string()
-    }
+    // pub fn id(&self) -> String {
+    //     self.master_replid.to_string()
+    // }
     pub fn replication(&self) -> String {
         format!(
             "# Replication\nrole:{}\nmaster_replid:{}\nmaster_repl_offset:{}",

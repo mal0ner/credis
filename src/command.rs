@@ -15,6 +15,13 @@ pub enum Command {
     Get(String),
     Set(String, String, Option<u64>), // <KEY> <VALUE> <TIMEOUT>
     Info(Option<String>),
+    Replconf(ReplconfCommand),
+}
+
+#[derive(Debug, Clone)]
+pub enum ReplconfCommand {
+    Port(String),
+    Capa(String),
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -47,6 +54,7 @@ fn parse_command(args: Vec<Resp>) -> Result<Command, CommandError> {
         "GET" => parse_get(&args),
         "SET" => parse_set(&args),
         "INFO" => parse_info(&args),
+        "REPLCONF" => parse_replconf(&args),
         _ => Err(InvalidCommand("Unsupported command")),
     }
 }
@@ -118,6 +126,22 @@ fn parse_info(args: &[Resp]) -> Result<Command, CommandError> {
     }
 }
 
+fn parse_replconf(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args {
+        [_, Resp::Bulk(Some(replconfcmd)), Resp::Bulk(Some(arg))] => {
+            match replconfcmd.to_lowercase().as_str() {
+                "listening-port" => Ok(Command::Replconf(ReplconfCommand::Port(arg.to_string()))),
+                "capa" => Ok(Command::Replconf(ReplconfCommand::Capa(arg.to_string()))),
+                _ => Err(InvalidArguments("Unrecognized argument")),
+            }
+        }
+        _ => Err(InvalidArguments(
+            "Usage: REPLCONF listening-port | capa <ARGS>",
+        )),
+    }
+}
+
 // executes a command and returns the unencoded response.
 pub async fn execute_command(
     cmd: Command,
@@ -171,6 +195,10 @@ pub async fn execute_command(
                 Ok(Resp::Null)
             }
         }
+        Command::Replconf(c) => match c {
+            ReplconfCommand::Port(_) => Ok(Resp::SimpleString("OK".to_string())),
+            ReplconfCommand::Capa(_) => Ok(Resp::SimpleString("OK".to_string())),
+        },
     }
 }
 
