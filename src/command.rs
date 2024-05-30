@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -15,13 +15,20 @@ pub enum Command {
     Get(String),
     Set(String, String, Option<u64>), // <KEY> <VALUE> <TIMEOUT>
     Info(Option<String>),
-    Replconf(ReplconfCommand),
+    Replconf(ReplconfArgs),
+    Psync(PsyncArgs),
 }
 
 #[derive(Debug, Clone)]
-pub enum ReplconfCommand {
+pub enum ReplconfArgs {
     Port(String),
-    Capa(String),
+    Capa(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+pub enum PsyncArgs {
+    Question(String),
+    Id(String, String),
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -55,6 +62,7 @@ fn parse_command(args: Vec<Resp>) -> Result<Command, CommandError> {
         "SET" => parse_set(&args),
         "INFO" => parse_info(&args),
         "REPLCONF" => parse_replconf(&args),
+        "PSYNC" => parse_psync(&args),
         _ => Err(InvalidCommand("Unsupported command")),
     }
 }
@@ -128,17 +136,66 @@ fn parse_info(args: &[Resp]) -> Result<Command, CommandError> {
 
 fn parse_replconf(args: &[Resp]) -> Result<Command, CommandError> {
     use CommandError::*;
-    match args {
-        [_, Resp::Bulk(Some(replconfcmd)), Resp::Bulk(Some(arg))] => {
-            match replconfcmd.to_lowercase().as_str() {
-                "listening-port" => Ok(Command::Replconf(ReplconfCommand::Port(arg.to_string()))),
-                "capa" => Ok(Command::Replconf(ReplconfCommand::Capa(arg.to_string()))),
-                _ => Err(InvalidArguments("Unrecognized argument")),
+    let mut iter = args.iter().skip(1);
+
+    let mut capabilities: HashSet<String> = HashSet::new();
+
+    while let Some(arg) = iter.next() {
+        match arg {
+            Resp::Bulk(Some(val)) => match val.to_lowercase().as_str() {
+                "capa" => {
+                    if let Some(next_wrapped) = iter.next() {
+                        match next_wrapped {
+                            Resp::Bulk(Some(next)) => {
+                                capabilities.insert(next.to_string());
+                            }
+                            _ => return Err(InvalidArguments("No valid value found after 'capa'")),
+                        }
+                    }
+                }
+                "listening-port" => {
+                    if let Some(next_wrapped) = iter.next() {
+                        match next_wrapped {
+                            Resp::Bulk(Some(port)) => {
+                                //TODO: Add port parsing/validation???
+                                return Ok(Command::Replconf(ReplconfArgs::Port(port.to_string())));
+                            }
+                            _ => return Err(InvalidArguments("No valid value found after 'capa'")),
+                        }
+                    }
+                }
+                _ => return Err(InvalidArguments("Unrecognized arguments")),
+            },
+            _ => {
+                return Err(InvalidArguments(
+                    "Usage: REPLCONF listening-port | capa <ARGS>",
+                ))
             }
         }
-        _ => Err(InvalidArguments(
-            "Usage: REPLCONF listening-port | capa <ARGS>",
-        )),
+    }
+    Ok(Command::Replconf(ReplconfArgs::Capa(
+        capabilities.into_iter().collect::<Vec<_>>(),
+    )))
+}
+
+fn parse_psync(args: &[Resp]) -> Result<Command, CommandError> {
+    use CommandError::*;
+    match args {
+        [_, Resp::Bulk(Some(psynccmd)), Resp::Bulk(Some(offset))] => {
+            match psynccmd.to_lowercase().as_str() {
+                "?" => match offset.as_str() {
+                    "-1" => Ok(Command::Psync(PsyncArgs::Question(offset.to_string()))),
+                    _ => Err(InvalidArguments(
+                        "Byte offset should be -1 when querying for replid",
+                    )),
+                },
+                _ => Ok(Command::Psync(PsyncArgs::Id(
+                    psynccmd.to_string(),
+                    offset.to_string(),
+                ))),
+            }
+        }
+        _ => Err(InvalidArguments("Usage: PSYNC ? | <REPL_ID> <OFFSET>")),
     }
 }
 
@@ -146,7 +203,7 @@ fn parse_replconf(args: &[Resp]) -> Result<Command, CommandError> {
 pub async fn execute_command(
     cmd: Command,
     cache: Arc<Mutex<HashMap<String, Query>>>,
-    info: Arc<crate::Info>,
+    info: Arc<Mutex<crate::Info>>,
 ) -> Result<Resp, CommandError> {
     match cmd {
         Command::Echo(arg) => Ok(Resp::Bulk(Some(arg))),
@@ -189,6 +246,7 @@ pub async fn execute_command(
             Ok(Resp::SimpleString("OK".to_string()))
         }
         Command::Info(category) => {
+            let info = info.lock().await;
             if category.is_some() {
                 Ok(Resp::Bulk(Some(info.replication())))
             } else {
@@ -196,8 +254,23 @@ pub async fn execute_command(
             }
         }
         Command::Replconf(c) => match c {
-            ReplconfCommand::Port(_) => Ok(Resp::SimpleString("OK".to_string())),
-            ReplconfCommand::Capa(_) => Ok(Resp::SimpleString("OK".to_string())),
+            ReplconfArgs::Port(_) => Ok(Resp::SimpleString("OK".to_string())),
+            ReplconfArgs::Capa(_) => Ok(Resp::SimpleString("OK".to_string())),
+        },
+        Command::Psync(p) => match p {
+            PsyncArgs::Question(_) => {
+                let info = info.lock().await;
+                Ok(Resp::SimpleString(format!("FULLRESYNC {} 0", info.id())))
+            }
+            PsyncArgs::Id(id, offset) => {
+                let mut info = info.lock().await;
+                let offset = offset.parse::<u64>().map_err(|_| {
+                    CommandError::InvalidArguments("byte offset must be a valid number")
+                })?;
+                info.master_replid = id;
+                info.master_repl_offset = offset;
+                Ok(Resp::SimpleString(format!("REPLCONF ACK {}", offset)))
+            }
         },
     }
 }

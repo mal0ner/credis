@@ -24,9 +24,9 @@ pub enum Role {
 }
 
 pub struct Info {
-    role: Role,
-    master_replid: String,
-    master_repl_offset: usize,
+    pub role: Role,
+    pub master_replid: String,
+    pub master_repl_offset: u64,
 }
 
 impl Info {
@@ -43,9 +43,9 @@ impl Info {
             Role::Slave => "role:slave".to_string(),
         }
     }
-    // pub fn id(&self) -> String {
-    //     self.master_replid.to_string()
-    // }
+    pub fn id(&self) -> String {
+        self.master_replid.to_string()
+    }
     pub fn replication(&self) -> String {
         format!(
             "# Replication\nrole:{}\nmaster_replid:{}\nmaster_repl_offset:{}",
@@ -116,12 +116,12 @@ pub struct Query {
 
 pub struct Handler {
     stream: TcpStream,
-    info: Arc<Info>,
+    info: Arc<Mutex<Info>>,
     buf: BytesMut,
 }
 
 impl Handler {
-    pub fn new(stream: TcpStream, server: Arc<Info>) -> Self {
+    pub fn new(stream: TcpStream, server: Arc<Mutex<Info>>) -> Self {
         Self {
             stream,
             info: server,

@@ -29,6 +29,8 @@ async fn repl_handshake(port: u16, address: HostSpec) -> anyhow::Result<()> {
         .await?;
     stream.flush().await?;
     stream.read_buf(&mut buf).await?;
+    stream.write_all(format_resp!["PSYNC", "?", "-1"]).await?;
+    stream.flush().await?;
     Ok(())
 }
 
@@ -64,7 +66,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
     };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    let info = Arc::new(Info::new(role));
+    let info = Arc::new(Mutex::new(Info::new(role)));
     let cache: Arc<Mutex<HashMap<String, Query>>> = Arc::new(Mutex::new(HashMap::new()));
     loop {
         let (stream, _) = listener.accept().await?;
