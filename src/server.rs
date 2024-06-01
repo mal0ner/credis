@@ -132,7 +132,7 @@ impl Handler {
         loop {
             let req = self.read_resp().await.unwrap();
 
-            let response = if let Some(req) = req {
+            let resp_queue = if let Some(req) = req {
                 let cmd = command::Command::from_resp(req).unwrap();
                 command::execute_command(cmd, cache.clone(), self.info.clone())
                     .await
@@ -140,8 +140,28 @@ impl Handler {
             } else {
                 break;
             };
-            println!("sending response: {:?}", response);
-            self.write_resp(response).await.unwrap();
+            println!("sending response: {:?}", resp_queue);
+            for r in resp_queue {
+                match r {
+                    Resp::SimpleString(x) => {
+                        if x.starts_with("FULLRESYNC") {
+                            self.write_resp(Resp::RDBLen(crate::RDB_64.len()))
+                                .await
+                                .unwrap();
+                            self.write_resp(Resp::Verbatim(crate::RDB_64.to_string()))
+                                .await
+                                .unwrap();
+                        } else {
+                            self.write_resp(Resp::SimpleString(x)).await.unwrap();
+                        }
+                    }
+                    _ => {
+                        self.write_resp(r).await.unwrap();
+                    }
+                }
+                // self.write_resp(r).await.unwrap();
+            }
+            self.stream.flush().await.unwrap();
         }
     }
     pub async fn read_resp(&mut self) -> Result<Option<Resp>, anyhow::Error> {

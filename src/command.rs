@@ -204,10 +204,10 @@ pub async fn execute_command(
     cmd: Command,
     cache: Arc<Mutex<HashMap<String, Query>>>,
     info: Arc<Mutex<crate::Info>>,
-) -> Result<Resp, CommandError> {
+) -> Result<Vec<Resp>, CommandError> {
     match cmd {
-        Command::Echo(arg) => Ok(Resp::Bulk(Some(arg))),
-        Command::Ping => Ok(Resp::SimpleString("PONG".to_string())),
+        Command::Echo(arg) => Ok(vec![Resp::Bulk(Some(arg))]),
+        Command::Ping => Ok(vec![Resp::SimpleString("PONG".to_string())]),
         Command::Get(key) => {
             let mut cache = cache.lock().await;
             let now = SystemTime::now();
@@ -216,15 +216,15 @@ pub async fn execute_command(
                 if let Some(timeout) = value.expiry {
                     if timeout < now {
                         cache.remove(&key);
-                        Ok(Resp::Null)
+                        Ok(vec![Resp::Null])
                     } else {
-                        Ok(Resp::Bulk(Some(value.clone().value)))
+                        Ok(vec![Resp::Bulk(Some(value.clone().value))])
                     }
                 } else {
-                    Ok(Resp::Bulk(Some(value.clone().value)))
+                    Ok(vec![Resp::Bulk(Some(value.clone().value))])
                 }
             } else {
-                Ok(Resp::Null)
+                Ok(vec![Resp::Null])
             }
         }
         Command::Set(key, value, timeout) => {
@@ -243,24 +243,28 @@ pub async fn execute_command(
                     expiry,
                 },
             );
-            Ok(Resp::SimpleString("OK".to_string()))
+            Ok(vec![Resp::SimpleString("OK".to_string())])
         }
         Command::Info(category) => {
             let info = info.lock().await;
             if category.is_some() {
-                Ok(Resp::Bulk(Some(info.replication())))
+                Ok(vec![Resp::Bulk(Some(info.replication()))])
             } else {
-                Ok(Resp::Null)
+                Ok(vec![Resp::Null])
             }
         }
         Command::Replconf(c) => match c {
-            ReplconfArgs::Port(_) => Ok(Resp::SimpleString("OK".to_string())),
-            ReplconfArgs::Capa(_) => Ok(Resp::SimpleString("OK".to_string())),
+            ReplconfArgs::Port(_) => Ok(vec![Resp::SimpleString("OK".to_string())]),
+            ReplconfArgs::Capa(_) => Ok(vec![Resp::SimpleString("OK".to_string())]),
         },
         Command::Psync(p) => match p {
             PsyncArgs::Question(_) => {
                 let info = info.lock().await;
-                Ok(Resp::SimpleString(format!("FULLRESYNC {} 0", info.id())))
+                let mut resp_queue: Vec<Resp> = Vec::new();
+                resp_queue.push(Resp::SimpleString(format!("FULLRESYNC {} 0", info.id())));
+                // resp_queue.push(Resp::RDBLen(crate::RDB_64.len()));
+                // resp_queue.push(Resp::Verbatim(crate::RDB_64.to_string()));
+                Ok(resp_queue)
             }
             PsyncArgs::Id(id, offset) => {
                 let mut info = info.lock().await;
@@ -269,7 +273,7 @@ pub async fn execute_command(
                 })?;
                 info.master_replid = id;
                 info.master_repl_offset = offset;
-                Ok(Resp::SimpleString(format!("REPLCONF ACK {}", offset)))
+                Ok(vec![Resp::SimpleString(format!("REPLCONF ACK {}", offset))])
             }
         },
     }

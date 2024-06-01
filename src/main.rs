@@ -13,6 +13,9 @@ use tokio::{
     sync::Mutex,
 };
 
+// base64 encoded empty rdb file for demo purposes
+pub const RDB_64: &str = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==";
+
 async fn repl_handshake(port: u16, address: HostSpec) -> anyhow::Result<()> {
     let mut stream = TcpStream::connect(address.to_string()).await?;
     stream.write_all(b"*1\r\n$4\r\nping\r\n").await?;

@@ -78,6 +78,8 @@ pub enum Resp {
     Integer(i64),
     Bulk(Option<String>),
     Array(Vec<Resp>),
+    Verbatim(String),
+    RDBLen(usize),
     Null,
 }
 
@@ -122,6 +124,8 @@ impl RespEncoding for Resp {
                 }
                 result
             }
+            Resp::RDBLen(file_len) => format!("${}\r\n", file_len).to_string(),
+            Resp::Verbatim(content) => content.to_string(),
             Resp::Null => "$-1\r\n".to_string(),
         }
     }
